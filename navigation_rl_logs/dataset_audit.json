@@ -1,0 +1,41 @@
+{
+  "counts": {
+    "forward": 22,
+    "obstacle": 1,
+    "stop": 2,
+    "up_left": 29,
+    "up_right": 10
+  },
+  "coverage_radii": {
+    "forward": 21.046724319458008,
+    "obstacle": 0.0,
+    "stop": 0.0,
+    "up_left": 20.475177764892578,
+    "up_right": 21.521408081054688
+  },
+  "leave_one_image_out_confusion": {
+    "forward": {
+      "forward": 7,
+      "up_left": 13,
+      "up_right": 2
+    },
+    "obstacle": {
+      "up_left": 1
+    },
+    "stop": {
+      "forward": 1,
+      "up_left": 1
+    },
+    "up_left": {
+      "up_left": 19,
+      "up_right": 8,
+      "forward": 2
+    },
+    "up_right": {
+      "up_right": 6,
+      "up_left": 4
+    }
+  },
+  "fingerprint": "ece9b6b0ac1a3d187a463dbbba468660626c0a689aaa525c64bb873563eb2860",
+  "limitations": "Descriptive only. Adjacent frames may leak across this check; no independent track evaluation. Image similarity gates do not detect collisions, free space, distance or goals."
+}
