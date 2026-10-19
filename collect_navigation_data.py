@@ -16,6 +16,7 @@ LABELS = {
     'w': 'forward',
     'a': 'up_left',
     'd': 'up_right',
+    'b': 'backward',
     's': 'stop',
     'x': 'obstacle',
     'n': 'uncertain',
@@ -46,7 +47,7 @@ def main():
             while True:
                 frame = capture(controller)
                 preview = frame.image.copy()
-                cv2.putText(preview, 'W forward | A left-front | D right-front | S stop | X obstacle | N uncertain | Q quit',
+                cv2.putText(preview, 'W forward | A left | D right | B reverse | S stop | X obstacle | N uncertain | Q quit',
                             (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
                 cv2.imshow('Dataset collector | W/A/D/S/X/N | Q quit', preview)
                 key = cv2.waitKey(max(1, round(args.interval * 1000))) & 0xFF

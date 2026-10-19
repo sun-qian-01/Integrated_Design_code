@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+navigation_dataset/
+navigation_logs/
+navigation_rl_logs/
+navigation*_model.json
+navigation*_policy.json
+phone-current.png
+phone_direction_points.json
+vision_profile.json
+road_profile.json
+训练成果检查_*.md

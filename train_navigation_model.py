@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 
-LABELS = ('forward', 'up_left', 'up_right', 'stop', 'obstacle', 'uncertain')
+LABELS = ('forward', 'up_left', 'up_right', 'backward', 'stop', 'obstacle', 'uncertain')
 
 
 def features(image):
