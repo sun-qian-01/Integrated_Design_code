@@ -1,4 +1,4 @@
-"""Eight-direction Android touch control via ADB; standard library only."""
+"""Eight-direction Android touch control via ADB with scrcpy video frames."""
 
 import argparse
 import base64
@@ -79,6 +79,19 @@ class PhoneController:
     def __init__(self, adb, serial=None):
         self.adb = adb
         self.serial = serial
+        self._video = None
+        self._video_lock = threading.Lock()
+
+    def video_frame(self, after=None):
+        from phone_video_stream import PhoneVideoStream
+        with self._video_lock:
+            if self._video is None:
+                self._video = PhoneVideoStream(self)
+        return self._video.read(after=after)
+
+    def close(self):
+        if self._video is not None:
+            self._video.close()
 
     def run(self, *args, timeout=15):
         command = [self.adb]
@@ -106,11 +119,15 @@ class PhoneController:
             raise ValueError('需要一台已授权手机；多台设备时请用 --serial 指定。')
 
     def screenshot(self):
-        data = self.run('exec-out', 'screencap', '-p')
-        width, height = png_size(data)
-        if width <= height:
+        import cv2
+        frame = self.video_frame()
+        if frame.width <= frame.height:
             raise ValueError('当前手机不是横屏，请先打开小车控制界面。')
-        return data, width, height
+        image = cv2.resize(frame.image, (frame.width, frame.height))
+        success, encoded = cv2.imencode('.png', image)
+        if not success:
+            raise ValueError('视频帧转 PNG 失败。')
+        return encoded.tobytes(), frame.width, frame.height
 
     def press(self, point, duration_ms):
         if not 50 <= duration_ms <= 2000:
@@ -279,7 +296,10 @@ def launch_gui(controller, points, config_path, initial_duration):
     root.protocol('WM_DELETE_WINDOW', close)
     root.after(100, poll)
     submit('screenshot', controller.screenshot)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        controller.close()
 
 
 def main():

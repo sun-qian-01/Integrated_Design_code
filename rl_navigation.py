@@ -553,8 +553,11 @@ def run_session(args, demonstrations, policy, controller):
 
 def main():
     parser = argparse.ArgumentParser(description='第一视角、人类奖励 Q-learning；默认只观察。')
-    parser.add_argument('--mode', choices=('observe', 'train', 'drive', 'trial'), default='observe')
+    parser.add_argument('--mode', choices=('observe', 'train', 'drive', 'trial', 'showcase'), default='observe')
     parser.add_argument('--trial-policy', type=Path, default=Path('navigation_trial_policy.json'))
+    parser.add_argument('--track-model', type=Path, default=Path('navigation_track_model.json'), help='trial/showcase 赛道像素模型')
+    parser.add_argument('--no-track-guard', action='store_true', help='禁用赛道边界约束，保留原策略')
+    parser.add_argument('--turn-ms', type=int, default=150, help='启用赛道约束时转弯/后退按压上限，默认 150ms')
     parser.add_argument('--dataset', type=Path, default=Path('navigation_dataset'))
     parser.add_argument('--model-output', type=Path, default=Path('navigation_model.json'))
     parser.add_argument('--policy', type=Path, default=Path('navigation_q_policy.json'))
@@ -575,6 +578,8 @@ def main():
     parser.add_argument('--audit', action='store_true', help='只分析数据，不连接手机')
     parser.add_argument('--check', action='store_true', help='分析一次手机画面，不发送动作')
     args = parser.parse_args()
+    if not 50 <= args.turn_ms <= 500:
+        parser.error('turn-ms 应为 50..500。')
     if args.interval_ms is None:
         args.interval_ms = args.pulse_ms
     if not 50 <= args.interval_ms <= 5000 or not 1 <= args.stable_frames <= 10:
@@ -602,7 +607,7 @@ def main():
                               'frame_fresh': time.monotonic() - frame.started <= args.max_age,
                               'touch_sent': False}, ensure_ascii=False, indent=2))
             return
-        if args.mode == 'trial':
+        if args.mode in ('trial', 'showcase'):
             from trial_navigation import run_trial
             run_trial(args, demonstrations, controller)
             return

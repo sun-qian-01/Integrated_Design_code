@@ -44,15 +44,18 @@ class TrialPolicy:
     def state(self, image):
         return str(int(np.argmin(np.linalg.norm(self.anchors - features(image), axis=1))))
 
-    def row(self, state, suggestion):
+    def row(self, state, suggestion, remember=True):
         if state not in self.values:
-            self.values[state] = [0.0] * len(ACTIONS)
+            values = [0.0] * len(ACTIONS)
             proposed = suggestion if suggestion in ACTIONS else 'forward'
-            self.values[state][ACTIONS.index(proposed)] = 0.2
+            values[ACTIONS.index(proposed)] = 0.2
+            if not remember:
+                return values
+            self.values[state] = values
         return self.values[state]
 
-    def choose(self, state, observation, epsilon, allow_backward):
-        row = self.row(state, observation.label)
+    def choose(self, state, observation, epsilon, allow_backward, remember=True):
+        row = self.row(state, observation.label, remember)
         if observation.label in ('stop', 'obstacle'):
             return 'stop', 'explicit stop/obstacle label; request feedback'
         candidates = list(ACTIONS if allow_backward else ACTIONS[:-1])
@@ -134,8 +137,31 @@ def run_trial(args, demonstrations, controller):
         raise ValueError('需要已校准的方向坐标。')
     points = load_points(args.points)
     policy = TrialPolicy(args.trial_policy, demonstrations)
+    track = None
+    track_path = getattr(args, 'track_model', None)
+    if track_path is not None and not getattr(args, 'no_track_guard', False):
+        from track_boundary import TrackBoundary
+        if not track_path.is_file():
+            raise ValueError('缺少赛道模型，请先运行 track_boundary.py train，或用 --no-track-guard 运行原策略。')
+        track = TrackBoundary.load(track_path)
+        print(f'已启用赛道边界约束：{track_path}；转弯最多 {args.turn_ms} ms，直行最多 250 ms。', flush=True)
+    autonomous = getattr(args, 'mode', 'trial') == 'showcase'
+    persist_training = not autonomous
+    window = 'Navigation | AUTO start | TRIAL start | PAUSE | Q quit'
+    clicks = queue.Queue()
+
+    def mouse_click(event, horizontal, vertical, flags, userdata):
+        if event == cv2.EVENT_LBUTTONUP and button_top[0] <= vertical < button_top[0] + 42:
+            if 10 <= horizontal < 270:
+                clicks.put('auto')
+            elif 280 <= horizontal < 540:
+                clicks.put('trial')
+            elif 550 <= horizontal < 810:
+                clicks.put('pause')
+
+    button_top = [0]
     cycle = TrialCycle(args.max_age)
-    output = args.logs / ('trial-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    output = args.logs / (('showcase-' if autonomous else 'trial-') + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     output.mkdir(parents=True)
     messages = queue.Queue()
     busy = None
@@ -145,11 +171,12 @@ def run_trial(args, demonstrations, controller):
     episode_started = None
     latest = None
     next_capture = 0.0
-    status = 'Press G: propose one action, execute, then WAIT for your feedback.'
-    print('试走模式：模糊分类允许有限尝试；每次动作后必须评价。'
-          'W/A/D/B/S 纠正上一动作前图，不立即移动。', flush=True)
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.imshow(WINDOW, np.zeros((540, 960, 3), dtype=np.uint8))
+    status = 'Click AUTO / TRIAL to start. G starts the selected mode.'
+    print('AUTO 展示：使用已训练策略连续决策，无随机探索、不等待评分、不更新训练文件。'
+          'TRIAL：每步等待评价或纠正。底部按钮开始，空格暂停。', flush=True)
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.imshow(window, np.zeros((540, 960, 3), dtype=np.uint8))
+    cv2.setMouseCallback(window, mouse_click)
 
     def submit(kind, operation):
         nonlocal busy
@@ -210,13 +237,19 @@ def run_trial(args, demonstrations, controller):
                             cycle.complete(latest)
                             status = 'Released. Rate: 1 good / 2 bad / 3 goal / 0 neutral; W/A/D/B/S correct BEFORE image.'
                             record('action_completed', id=cycle.pending.identifier, action=cycle.pending.action)
+                            if autonomous:
+                                completed = cycle.consume()
+                                record('showcase_step', id=completed.identifier, action=completed.action, learned=False)
+                                status = f'AUTO: {completed.action} completed; deciding from the new frame.'
                             print(status, flush=True)
                 now = time.monotonic()
                 if active and (steps >= args.steps or now - episode_started >= args.seconds):
                     active = False
                     record('episode_limit', steps=steps)
-                    status = 'Episode limit; feedback still accepted. G starts next episode after rating.'
+                    status = 'Episode limit reached. Paused. Start again for a new bounded run.'
                 panel = latest.image.copy() if latest is not None else np.zeros((540, 960, 3), dtype=np.uint8)
+                if track is not None and latest is not None:
+                    panel = track.overlay(panel)
                 waiting = cycle.pending is not None and cycle.pending.after is not None
                 if waiting:
                     before_image = cycle.pending.before.image
@@ -231,27 +264,52 @@ def run_trial(args, demonstrations, controller):
                     cv2.putText(panel, 'AFTER: evaluate the result', (488, 140),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
                 cv2.rectangle(panel, (0, 0), (panel.shape[1], 118), (15, 15, 15), -1)
-                lines = [f'TRIAL | {"WAIT FEEDBACK" if waiting else "ACTIVE" if active else "PAUSED"} | steps {steps}/{args.steps}',
-                         status[:115], f'Q rewards={policy.updates} corrections={policy.corrections} | pulse={args.pulse_ms}ms',
+                lines = [f'{"AUTO SHOWCASE" if autonomous else "TRIAL"} | {"WAIT FEEDBACK" if waiting else "ACTIVE" if active else "PAUSED"} | steps {steps}/{args.steps}',
+                         status[:115], f'Q rewards={policy.updates} corrections={policy.corrections} | pulse cap={args.pulse_ms}ms | track={track is not None}',
                          'G start | 1/2/3/0 reward | W/A/D/B/S correct previous decision | SPACE pause | Q quit']
                 for index, text in enumerate(lines):
                     cv2.putText(panel, text, (8, 22 + index * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 240, 255), 1)
-                cv2.imshow(WINDOW, panel)
+                button_top[0] = panel.shape[0] + 5
+                display = np.zeros((panel.shape[0] + 54, 960, 3), dtype=np.uint8)
+                display[:panel.shape[0], :panel.shape[1]] = panel
+                for left, text, color in ((10, 'AUTO: start showcase', (65, 125, 40)),
+                                          (280, 'TRIAL: start training', (130, 85, 35)),
+                                          (550, 'PAUSE', (45, 45, 145))):
+                    cv2.rectangle(display, (left, button_top[0]), (left + 260, button_top[0] + 41), color, -1)
+                    cv2.putText(display, text, (left + 10, button_top[0] + 27),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 1)
+                cv2.imshow(window, display)
                 key = cv2.waitKey(25) & 0xFF
+                requested_mode = None
+                try:
+                    click = clicks.get_nowait()
+                    if click == 'pause':
+                        key = 32
+                    else:
+                        requested_mode = click == 'auto'
+                        key = ord('g')
+                except queue.Empty:
+                    pass
                 if ord('A') <= key <= ord('Z'):
                     key += 32
-                if key in (27, ord('q')) or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
+                if key in (27, ord('q')) or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                     active = False
                     break
                 if key == 32:
                     active = False
                     status = 'Paused; current pulse finishes and releases. Feedback still accepted.'
                 if key == ord('g') and not failed and cycle.pending is None and busy != 'correction':
+                    if requested_mode is not None:
+                        autonomous = requested_mode
+                        persist_training = persist_training or not autonomous
                     active = True
                     steps = 0
                     episode_started = now
-                    record('episode_start')
+                    record('episode_start', mode='showcase' if autonomous else 'trial',
+                           updates=policy.updates, corrections=policy.corrections)
                     status = 'Start queued; waiting for a fresh image.'
+                elif key == ord('g') and cycle.pending is not None:
+                    status = 'Finish feedback / current action before starting another mode.'
                 if waiting and busy != 'correction':
                     trial = cycle.pending
                     if key in tuple(map(ord, '1230')):
@@ -278,26 +336,38 @@ def run_trial(args, demonstrations, controller):
                     if active and ready:
                         observation = demonstrations.observe(latest.image, minimum_margin=args.margin)
                         state = policy.state(latest.image)
-                        action, choice_reason = policy.choose(state, observation, args.epsilon, args.allow_backward)
+                        action, choice_reason = policy.choose(state, observation, 0.0 if autonomous else args.epsilon,
+                                                              args.allow_backward, remember=not autonomous)
+                        pulse_ms = args.pulse_ms
+                        track_decision = None
+                        if track is not None:
+                            action, pulse_ms, track_decision = track.constrain(latest.image, action, pulse_ms, args.turn_ms)
+                            choice_reason += f'; track={track_decision["suggestion"]}, executed={action}, pulse={pulse_ms}ms'
                         trial = Trial(str(time.time_ns()), latest, observation, state, action)
                         cycle.begin(trial, time.monotonic())
                         steps += 1
                         record('proposal', id=trial.identifier, state=state, action=action,
                                suggested=observation.label, ambiguity=observation.reason,
-                               reason=choice_reason, q_values=list(policy.row(state, observation.label)))
+                               reason=choice_reason, q_values=list(policy.row(state, observation.label, remember=not autonomous)),
+                               track=track_decision, pulse_ms=pulse_ms,
+                               mode='showcase' if autonomous else 'trial')
                         print(f'自主选择：{action}；原因：{choice_reason}；原分类：{observation.reason}', flush=True)
                         if action == 'stop':
                             write_frame(output / f'{trial.identifier}_before.jpg', latest.image)
                             cycle.complete(latest)
                             record('policy_stop', id=trial.identifier, touch_sent=False)
                             status = 'Policy stop: rate it or W/A/D/B/S correct it; no touch sent.'
+                            if autonomous:
+                                cycle.consume()
+                                active = False
+                                status = 'AUTO stopped by policy/obstacle label. Inspect scene before restarting.'
                         else:
                             target = pixel_point(points[BUTTONS[action]], latest.width, latest.height)
                             record('action_submitted', id=trial.identifier, action=action,
-                                   point=target, pulse_ms=args.pulse_ms, source='policy')
-                            submit('action', lambda trial=trial, target=target: execute_logged(
+                                   point=target, pulse_ms=pulse_ms, source='policy')
+                            submit('action', lambda trial=trial, target=target, pulse_ms=pulse_ms: execute_logged(
                                 controller, target, trial.action, trial.before, trial.observation,
-                                output, trial.identifier, args.pulse_ms, args.settle, args.interval_ms, 'policy'))
+                                output, trial.identifier, pulse_ms, args.settle, min(args.interval_ms, pulse_ms), 'policy'))
                     elif now >= next_capture:
                         if active:
                             status = reason
@@ -316,6 +386,7 @@ def run_trial(args, demonstrations, controller):
                     record('exit_timeout', operation=busy)
             if cycle.pending is not None:
                 record('unrated_transition', id=cycle.pending.identifier, learned=False)
-            policy.save()
+            if persist_training:
+                policy.save()
             cv2.destroyAllWindows()
     print(f'试走记录：{output}；Q 奖励更新 {policy.updates}，人工纠正 {policy.corrections}', flush=True)

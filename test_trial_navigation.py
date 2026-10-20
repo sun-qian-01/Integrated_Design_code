@@ -68,33 +68,55 @@ class TrialTests(unittest.TestCase):
         cycle.consume()
         self.assertTrue(cycle.ready(self.frame(), time.monotonic())[0])
 
-    def run_fake_session(self, feedback):
+    def run_fake_session(self, feedback, mode='trial', expected_calls=1, click_auto=False, guard=None):
         points = self.root / 'points.json'
         points.write_text(json.dumps(default_points()))
         args = SimpleNamespace(points=points, trial_policy=self.root / 'session-policy.json',
                                logs=self.root / 'logs', max_age=3, steps=10, seconds=60,
                                pulse_ms=500, settle=0, interval_ms=500, epsilon=0,
-                               allow_backward=False, margin=0.12)
+                               allow_backward=False, margin=0.12, mode=mode)
+        if guard is not None:
+            args.track_model = self.root / 'track.json'
+            args.track_model.write_text('{}')
+            args.turn_ms = 150
+        original_policy = None
+        if mode == 'showcase':
+            self.policy.path = args.trial_policy
+            self.policy.correct('0', 'forward', 'up_right')
+            original_policy = args.trial_policy.read_bytes()
         workers = []
         keys = iter([-1, ord('G'), -1, -1, feedback, -1, ord('q')])
 
         def wait_key(delay):
             key = next(keys)
+            if click_auto and key == ord('G'):
+                rendered = imshow.call_args.args[1]
+                callback.call_args.args[1](1 + 3, 20, rendered.shape[0] - 30, 0, None)
+                key = -1
             while workers:
                 workers.pop(0)()
             return key
 
-        with patch('trial_navigation.threading.Thread', side_effect=lambda target, **kwargs:
+        with patch('track_boundary.TrackBoundary.load', return_value=guard), \
+             patch('trial_navigation.threading.Thread', side_effect=lambda target, **kwargs:
                    SimpleNamespace(start=lambda: workers.append(target))), \
              patch('trial_navigation.capture', side_effect=lambda controller: self.frame()), \
              patch('trial_navigation.execute_logged', side_effect=lambda *args: self.frame()) as execute, \
-             patch('trial_navigation.cv2.namedWindow'), patch('trial_navigation.cv2.imshow'), \
+             patch('trial_navigation.cv2.namedWindow'), patch('trial_navigation.cv2.imshow') as imshow, \
+             patch('trial_navigation.cv2.setMouseCallback') as callback, \
              patch('trial_navigation.cv2.waitKey', side_effect=wait_key), \
              patch('trial_navigation.cv2.getWindowProperty', return_value=1), \
              patch('trial_navigation.cv2.destroyAllWindows'):
             run_trial(args, self.demonstrations, Mock())
-            execute.assert_called_once()
-            self.assertEqual(execute.call_args.args[2], 'forward')
+            self.assertEqual(execute.call_count, expected_calls)
+            if expected_calls:
+                expected = guard.constrain.return_value[0] if guard is not None else 'up_right' if mode == 'showcase' else 'forward'
+                self.assertEqual(execute.call_args.args[2], expected)
+                if guard is not None:
+                    self.assertEqual(execute.call_args.args[7], 150)
+                    self.assertEqual(execute.call_args.args[9], 150)
+        if original_policy is not None:
+            self.assertEqual(args.trial_policy.read_bytes(), original_policy)
         return json.loads(args.trial_policy.read_text(encoding='utf-8'))
 
     def test_gui_ambiguous_frame_executes_then_waits_no_reward_no_learning(self):
@@ -105,6 +127,36 @@ class TrialTests(unittest.TestCase):
         stored = self.run_fake_session(ord('2'))
         self.assertEqual(stored['updates'], 1)
         self.assertLess(stored['q_values']['0'][ACTIONS.index('forward')], 0)
+
+    def test_track_override_executes_short_pulse_and_rates_executed_action(self):
+        guard = Mock()
+        guard.overlay.side_effect = lambda image: image
+        guard.constrain.return_value = ('up_right', 150, {'suggestion': 'up_right'})
+        stored = self.run_fake_session(ord('2'), guard=guard)
+        self.assertLess(stored['q_values']['0'][ACTIONS.index('up_right')], 0)
+        self.assertGreater(stored['q_values']['0'][ACTIONS.index('forward')], 0)
+
+    def test_track_stop_never_dispatches_touch(self):
+        guard = Mock()
+        guard.overlay.side_effect = lambda image: image
+        guard.constrain.return_value = ('stop', 150, {'suggestion': 'stop'})
+        self.run_fake_session(-1, expected_calls=0, guard=guard)
+
+    def test_showcase_continues_without_feedback_and_keeps_trained_policy(self):
+        stored = self.run_fake_session(-1, mode='showcase', expected_calls=2)
+        self.assertEqual(stored['updates'], 0)
+        self.assertEqual(stored['corrections'], 1)
+
+    def test_auto_button_switches_trial_to_continuous_showcase(self):
+        self.run_fake_session(-1, expected_calls=2, click_auto=True)
+
+    def test_showcase_stop_does_not_send_movement(self):
+        self.observation.label = 'obstacle'
+        self.run_fake_session(-1, mode='showcase', expected_calls=0)
+
+    def test_read_only_choice_does_not_create_q_state(self):
+        self.policy.choose('new-state', self.observation, 0, False, remember=False)
+        self.assertNotIn('new-state', self.policy.values)
 
     def test_positive_reward_is_saved(self):
         self.policy.row('0', 'forward')

@@ -1,5 +1,43 @@
 # 教改课程项目初步规划：基于视觉的智能小车探索与导航
 
+## 当前工程入口
+
+本仓库维护小车接入、持续视频取帧、人工示范学习、有限尝试训练和自主展示代码，以及课程教学资料。后文保留课程初步规划。
+
+| 内容 | 入口 |
+| --- | --- |
+| USB 连接与投屏 | [USB手机投屏与电脑控制方案](USB手机投屏与电脑控制方案.md) |
+| 八方向控制与坐标校准 | `phone_direction_control.py` · [使用说明](八方向控制使用说明.md) |
+| 持续视频流与只读测速 | `phone_video_stream.py` · [使用说明](持续视频流取帧说明.md) |
+| 人工样本采集、基础分类训练 | `collect_navigation_data.py`、`train_navigation_model.py` |
+| 逐步尝试、人工奖励与纠正 | `rl_navigation.py --mode trial` · [训练说明](有限尝试训练说明.md) |
+| 全程系统决策展示 | `rl_navigation.py --mode showcase` · [展示说明](自主展示模式说明.md) |
+| 赛道像素标注、训练和边界约束 | `track_boundary.py` · [弯道控制说明](赛道边界识别与弯道控制说明.md) |
+| 教学大纲与备课分析 | [教学大纲](教学资料/三个PPT六个上午教学大纲.md) · [仓库分析与教学准备](教学资料/仓库分析与教学准备.md) |
+
+### 安装和验证
+
+在 Windows 项目目录中运行：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\requirements-vision.txt
+.\.venv\Scripts\python.exe -B -m unittest discover -v
+```
+
+设备操作还需要 scrcpy 和已授权的 Android USB 调试连接。先进行方向校准、采集本地示范数据，再运行训练或展示；具体命令见对应说明。自动测试使用模拟控制，不向实车发送动作。
+
+### 代码与本地实验文件
+
+为了保持现有导入和命令兼容，Python 入口、测试及使用说明保留在根目录，教学材料放在 `教学资料/`。以下内容保留在本机，由 `.gitignore` 排除：
+
+- `navigation_dataset/`：训练截图、动作标签及赛道像素标注。
+- `navigation_logs/`、`navigation_rl_logs/`：运行日志、动作前后图片和离线识别预览。
+- `navigation*_model.json`、`navigation*_policy.json`：训练模型与学习到的策略。
+- 手机触控坐标、视觉标定、临时手机画面、虚拟环境及 Python 缓存。
+
+新克隆的仓库不包含这些实验文件。赛道模型需先标注并训练；临时使用原策略时，可通过 `--no-track-guard` 禁用边界约束，但仍需要本地动作示范和触控坐标。代码与说明可复现训练流程，不代表附带了已训练模型。
+
 
 ## 一、项目定位
 

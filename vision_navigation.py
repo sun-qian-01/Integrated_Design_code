@@ -29,13 +29,13 @@ class Frame:
 
 
 def capture(controller):
-    started = time.monotonic()
-    data, width, height = controller.screenshot()
-    image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError('手机截图无法解码。')
+    video = controller.video_frame()
+    width, height = video.width, video.height
+    if width <= height:
+        raise ValueError('当前手机不是横屏，请先打开小车控制界面。')
+    image = video.image
     image = cv2.resize(image, (VIEW_WIDTH, round(height * VIEW_WIDTH / width)))
-    return Frame(image, width, height, started, time.monotonic())
+    return Frame(image, width, height, video.received, time.monotonic())
 
 
 def crop(image, rectangle):
